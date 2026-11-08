@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="robots" content="noindex">
+<title>F1 ao vivo · Interlagos</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0d10;--linha:#1f252c;--txt:#f5f7fa;--sub:#a3adba;--sobe:#34d399;--desce:#f87171}
+*{box-sizing:border-box;margin:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--txt);font:16px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding-bottom:env(safe-area-inset-bottom)}
+header{position:sticky;top:0;z-index:2;background:var(--bg);padding:calc(12px + env(safe-area-inset-top)) 14px 10px;border-bottom:1px solid var(--linha)}
+h1{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--sub)}
+#volta{font-size:30px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
+#volta small{font-size:16px;font-weight:600;color:var(--sub)}
+#estado{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--sub);margin-top:4px}
+#ponto{width:9px;height:9px;border-radius:50%;background:#6b7280;flex:none}
+#ponto.ok{background:#22c55e}
+#ponto.erro{background:#f59e0b}
+#brs{font-size:15px;font-weight:700;color:#facc15;margin-top:6px}
+#brs:empty{display:none}
+ol{list-style:none;padding:0}
+li{display:grid;grid-template-columns:32px 10px 1fr auto 44px;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--linha)}
+li.br{background:rgba(250,204,21,.1)}
+li.mudou{animation:mudou 1.8s ease-out}
+@keyframes mudou{from{background:#35506b}}
+.pos{font-size:21px;font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
+.faixa{width:10px;height:34px;border-radius:3px}
+.nome{font-size:18px;font-weight:700}
+.tag{font-size:11px;font-weight:800;color:#0b0d10;background:#facc15;border-radius:3px;padding:1px 4px;margin-left:6px;vertical-align:2px}
+.equipe{font-size:13px;color:var(--sub)}
+.num{font-size:15px;font-weight:700;color:var(--sub);font-variant-numeric:tabular-nums}
+.dif{font-size:15px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums;color:var(--sub)}
+.dif.sobe{color:var(--sobe)}
+.dif.desce{color:var(--desce)}
+footer{padding:12px 14px 22px;font-size:12px;color:var(--sub)}
+</style>
+</head>
+<body>
+<header>
+  <h1>GP de São Paulo · Ao vivo</h1>
+  <div id="volta">Carregando…</div>
+  <div id="estado"><span id="ponto"></span><span id="texto">Buscando posições</span></div>
+  <div id="brs"></div>
+</header>
+<ol id="lista"></ol>
+<footer>▲▼ comparado com a posição de largada. Atualiza a cada 8 segundos com o placar público da ESPN, que não informa as diferenças de tempo.</footer>
+<script>
+const FEED = 'https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard';
+const INTERVALO = 8000, VOLTAS = 71;
+const O='#ff8000',K='#15181c',S='#c9ced3',W='#ffffff',B='#2563eb',G='#16a34a',Y='#facc15',N='#1e3a8a',R='#e10600',AG='#0b6b4f',L='#b6ff3c',BL='#1e6bff',P='#ff5fa2',C='#e5e7eb',F='#dc0000';
+const PILOTOS = {
+  norris:['McLaren',1,1,O,K], antonelli:['Mercedes',12,2,S,K], lawson:['Racing Bulls',30,3,W,B],
+  hulkenberg:['Audi',27,4,G,Y], hadjar:['Red Bull',6,5,N,W], bearman:['Haas',87,6,W,R],
+  russell:['Mercedes',63,7,S,K], alonso:['Aston Martin',14,8,AG,L], albon:['Williams',23,9,BL,W],
+  piastri:['McLaren',81,10,O,K], camara:['Haas',51,11,W,R], sainz:['Williams',55,12,BL,W],
+  leclerc:['Ferrari',16,13,F,W], colapinto:['Alpine',43,14,BL,P], gasly:['Alpine',10,15,BL,P],
+  stroll:['Aston Martin',18,16,AG,L], bottas:['Cadillac',77,17,C,K], lindblad:['Racing Bulls',41,18,W,B],
+  bortoleto:['Audi',5,19,G,Y], hamilton:['Ferrari',44,20,F,W], verstappen:['Red Bull',3,21,N,W],
+  perez:['Cadillac',11,22,C,K]
+};
+const BRASILEIROS = new Set(['camara','bortoleto']);
+const $ = id => document.getElementById(id);
+const chave = nome => nome.trim().split(/\s+/).pop().normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+const cria = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
+
+let ultimaOk = 0, anterior = {}, timer = null, encerrada = false;
+
+function desenha(corrida) {
+  const st = corrida.status || {}, tipo = st.type || {};
+  const volta = $('volta');
+  volta.textContent = '';
+  if (tipo.state === 'pre') volta.textContent = 'Aguardando a largada';
+  else if (tipo.state === 'post') volta.textContent = 'Corrida encerrada';
+  else { volta.append('Volta ' + (st.period || '–') + ' '); volta.append(cria('small', '', 'de ' + VOLTAS)); }
+
+  const carros = [...(corrida.competitors || [])].sort((a, b) => a.order - b.order);
+  const frag = document.createDocumentFragment();
+  const agora = {};
+  for (const c of carros) {
+    const a = c.athlete || {};
+    const nomeCompleto = a.displayName || a.shortName || '?';
+    const k = chave(a.shortName || nomeCompleto);
+    const p = PILOTOS[k];
+    agora[k] = c.order;
+    const li = cria('li', BRASILEIROS.has(k) ? 'br' : '');
+    if (anterior[k] !== undefined && anterior[k] !== c.order) li.classList.add('mudou');
+    li.append(cria('div', 'pos', c.order));
+    const faixa = cria('div', 'faixa');
+    faixa.style.background = p ? `linear-gradient(to bottom,${p[3]} 62%,${p[4]} 62%)` : '#6b7280';
+    li.append(faixa);
+    const bloco = cria('div');
+    const nome = cria('div', 'nome', nomeCompleto.trim().split(/\s+/).pop());
+    if (BRASILEIROS.has(k)) nome.append(cria('span', 'tag', 'BR'));
+    bloco.append(nome, cria('div', 'equipe', p ? p[0] : ''));
+    li.append(bloco);
+    li.append(cria('div', 'num', p ? '#' + p[1] : ''));
+    const d = p ? p[2] - c.order : 0;
+    li.append(cria('div', 'dif' + (d > 0 ? ' sobe' : d < 0 ? ' desce' : ''), !p || d === 0 ? '=' : (d > 0 ? '▲' : '▼') + Math.abs(d)));
+    frag.append(li);
+  }
+  $('lista').replaceChildren(frag);
+  const lugar = k => agora[k] !== undefined ? agora[k] + 'º' : '–';
+  $('brs').textContent = `Câmara ${lugar('camara')} · Bortoleto ${lugar('bortoleto')} · Hamilton ${lugar('hamilton')}`;
+  anterior = agora;
+  encerrada = tipo.state === 'post';
+}
+
+function mostraEstado() {
+  const ponto = $('ponto'), texto = $('texto');
+  if (!ultimaOk) { ponto.className = 'erro'; texto.textContent = 'Sem conexão com os dados, tentando de novo'; return; }
+  const s = Math.round((Date.now() - ultimaOk) / 1000);
+  if (s > 30) { ponto.className = 'erro'; texto.textContent = `Sem atualizar há ${s} s, tentando de novo`; }
+  else { ponto.className = 'ok'; texto.textContent = `Atualizado há ${s} s`; }
+}
+
+function agenda() {
+  clearTimeout(timer);
+  if (!document.hidden) timer = setTimeout(puxa, encerrada ? 60000 : INTERVALO);
+}
+
+async function puxa() {
+  const ctrl = new AbortController();
+  const limite = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(FEED + '?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const dados = await r.json();
+    const evento = (dados.events || [])[0];
+    const corrida = evento && (evento.competitions || []).find(c => c.type && c.type.abbreviation === 'Race');
+    if (!corrida) throw new Error('corrida não encontrada');
+    desenha(corrida);
+    ultimaOk = Date.now();
+  } catch (e) {
+    console.warn('Falha ao atualizar:', e.message);
+  } finally {
+    clearTimeout(limite);
+    mostraEstado();
+    agenda();
+  }
+}
+
+async function manterTelaAcesa() {
+  try { if ('wakeLock' in navigator && !document.hidden) await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { manterTelaAcesa(); puxa(); } });
+setInterval(mostraEstado, 1000);
+manterTelaAcesa();
+puxa();
+</script>
+</body>
+</html>
